@@ -15,6 +15,17 @@ Item {
   property bool isProcessingQueue: false
   property string currentUploadPath: ""
   property bool manualUploadTriggered: false
+  property string lastActiveWebdavProject: ""
+  property date nextScheduledCheck: new Date(0)
+
+  property int debugIntervalMinutes: 10
+
+  function intervalMs() {
+    if (debugIntervalMinutes > 0) {
+      return debugIntervalMinutes * 60 * 1000
+    }
+    return Math.max(1, settings.intervalHours) * 3600000
+  }
 
   Settings {
     id: settings
@@ -23,12 +34,21 @@ Item {
     property bool enabled: false
     property int intervalHours: 2
     property string projectStatuses: "{}"
+    property string pendingUploads: "[]"
+    property string knownProjects: "[]"
+    property string timerAnchor: ""
   }
 
   Component.onCompleted: {
     iface.addItemToDashboardActionsToolbar(uploadButton)
+    updateActiveProject()
     if (settings.enabled) {
-      Qt.callLater(runAutoUploadCycle)
+      // if (!settings.timerAnchor) {
+      //   settings.timerAnchor = new Date().toISOString()
+      // }
+      settings.timerAnchor = new Date().toISOString() //for testing
+      updateNextCheck()
+      Qt.callLater(function() { runAutoUploadCycle(false) })
       uploadTimer.restart()
     }
   }
@@ -41,14 +61,54 @@ Item {
     settingsDialog.open()
   }
 
+  Connections {
+    target: qgisProject ? qgisProject : null
+
+    function onFileNameChanged() {
+      var previousProject = lastActiveWebdavProject
+      updateActiveProject()
+
+      if (!settings.enabled) {
+        return
+      }
+
+      // If we left a WebDAV project that was marked as "due" (missed a scheduled upload),
+      // upload it now since we're no longer actively using it
+      if (previousProject && previousProject !== lastActiveWebdavProject) {
+        if (isPending(previousProject) && !isProcessingQueue && !webdav.isUploadingPath) {
+          uploadQueue = [previousProject]
+          isProcessingQueue = true
+          manualUploadTriggered = false
+          processNextInQueue()
+        }
+      }
+    }
+  }
+
+  // Timer {
+  //   id: uploadTimer
+  //   repeat: true
+  //   running: false
+  //   interval: Math.max(1, settings.intervalHours) * 3600000
+
+  //   onTriggered: {
+  //     updateNextCheck()
+  //     runAutoUploadCycle(true)
+  //   }
+  // }
+
   Timer {
     id: uploadTimer
     repeat: true
     running: false
-    interval: Math.max(1, settings.intervalHours) * 3600000
+    interval: intervalMs()
 
     onTriggered: {
-      runAutoUploadCycle()
+      // keep "Next check" accurate
+      settings.timerAnchor = new Date().toISOString()
+
+      updateNextCheck()
+      runAutoUploadCycle(true)
     }
   }
 
@@ -66,14 +126,15 @@ Item {
     onUploadFinished: function(success, message) {
       if (currentUploadPath) {
         saveProjectStatus(currentUploadPath, success ? "success" : "failed", message)
+        if (success) {
+          removePending(currentUploadPath)
+        }
       }
-
       if (manualUploadTriggered) {
         uploadOverlay.close()
         mainWindow.displayToast(success ? qsTr("Upload complete") : qsTr("Upload failed: %1").arg(message))
         manualUploadTriggered = false
       }
-
       if (isProcessingQueue) {
         Qt.callLater(processNextInQueue)
       } else {
@@ -84,14 +145,15 @@ Item {
     onUploadSkipped: function(reason) {
       if (currentUploadPath) {
         saveProjectStatus(currentUploadPath, "skipped", reason)
+        if (isNoChangesReason(reason)) {
+          removePending(currentUploadPath)
+        }
       }
-
       if (manualUploadTriggered) {
         uploadOverlay.close()
         mainWindow.displayToast(qsTr("Skipped: %1").arg(reason))
         manualUploadTriggered = false
       }
-
       if (isProcessingQueue) {
         Qt.callLater(processNextInQueue)
       } else {
@@ -102,10 +164,9 @@ Item {
 
   QfToolButton {
     id: uploadButton
-    objectName: "WebdavUploadButton"
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-    height: parent.height * 0.9
-    width: parent.height * 0.9
+    height: parent ? parent.height * 0.9 : 48
+    width: height
     iconSource: Qt.resolvedUrl("webdav-upload-button.svg")
     iconColor: Theme.mainTextColor
     bgcolor: "transparent"
@@ -171,34 +232,42 @@ Item {
     onOpened: {
       enableSwitch.checked = settings.enabled
       intervalTumbler.currentIndex = Math.max(0, settings.intervalHours - 1)
+      updateNextCheck()
       refreshStatus()
     }
 
     onAccepted: {
       settings.enabled = enableSwitch.checked
       settings.intervalHours = intervalTumbler.currentIndex + 1
-      uploadTimer.interval = settings.intervalHours * 3600000
+      //uploadTimer.interval = settings.intervalHours * 3600000
 
       if (settings.enabled) {
-        Qt.callLater(runAutoUploadCycle)
+        settings.timerAnchor = new Date().toISOString()
+        updateNextCheck()
+        updateActiveProject()
+        Qt.callLater(function() { runAutoUploadCycle(false) })
         uploadTimer.restart()
       } else {
         uploadTimer.stop()
+        settings.timerAnchor = ""
+        updateNextCheck()
+        savePending([])
       }
-
       mainWindow.displayToast(qsTr("Settings saved"))
     }
 
     function refreshStatus() {
       var path = getProjectPath()
-      if (path && webdav.hasWebdavConfiguration(path)) {
+      if (path) {
         var root = findProjectRoot(path)
-        statusSection.projectRoot = root
-        statusSection.statusData = getProjectStatus(root)
-        statusSection.visible = true
-      } else {
-        statusSection.visible = false
+        if (isValidRoot(root)) {
+          statusSection.projectRoot = root
+          statusSection.statusData = getProjectStatus(root)
+          statusSection.visible = true
+          return
+        }
       }
+      statusSection.visible = false
     }
 
     ColumnLayout {
@@ -295,7 +364,9 @@ Item {
             color: Theme.mainTextColor
           }
 
-          Item { Layout.fillWidth: true }
+          Item {
+            Layout.fillWidth: true
+          }
         }
       }
 
@@ -367,6 +438,20 @@ Item {
             font: Theme.tipFont
             color: Theme.mainTextColor
           }
+
+          Label {
+            text: qsTr("Next check:")
+            font: Theme.tipFont
+            color: Theme.secondaryTextColor
+            visible: settings.enabled
+          }
+
+          Label {
+            text: nextScheduledCheck.getTime() > 0 ? Qt.formatDateTime(nextScheduledCheck, "MMM d, hh:mm") : qsTr("Pending")
+            font: Theme.tipFont
+            color: Theme.mainTextColor
+            visible: settings.enabled
+          }
         }
 
         Label {
@@ -395,48 +480,6 @@ Item {
     }
   }
 
-  function getProjectPath() {
-    if (qgisProject && qgisProject.fileName) {
-      var path = qgisProject.fileName.toString()
-      if (path.startsWith("file://")) {
-        path = path.substring(7)
-      }
-      return decodeURIComponent(path)
-    }
-    return ""
-  }
-
-  function getProjectStatuses() {
-    try {
-      return JSON.parse(settings.projectStatuses)
-    } catch (e) {
-      return {}
-    }
-  }
-
-  function getProjectStatus(projectRoot) {
-    var statuses = getProjectStatuses()
-    var key = Qt.md5(projectRoot)
-    return statuses[key] || {}
-  }
-
-  function saveProjectStatus(projectRoot, status, message) {
-    var statuses = getProjectStatuses()
-    var key = Qt.md5(projectRoot)
-    statuses[key] = {
-      status: status,
-      message: message || "",
-      timestamp: new Date().toISOString()
-    }
-    settings.projectStatuses = JSON.stringify(statuses)
-  }
-
-  function findWebdavProjects(callback) {
-    var appDir = PlatformUtilities.applicationDirectory
-    var importedDir = appDir + "/Imported Projects"
-    folderScanner.startScan(importedDir, callback)
-  }
-
   QtObject {
     id: folderScanner
 
@@ -458,7 +501,7 @@ Item {
 
     function scanNext() {
       if (pendingFolders.length === 0) {
-        scanning = false;
+        scanning = false
         if (callback) {
           callback(foundProjects)
         }
@@ -502,8 +545,36 @@ Item {
     onStatusChanged: {
       if (status === FolderListModel.Ready) {
         folderScanner.handleResults()
+      } else if (status === FolderListModel.Error || status === FolderListModel.Null) {
+        folderScanner.scanNext()
       }
     }
+  }
+
+  function getProjectPath() {
+    if (qgisProject && qgisProject.fileName) {
+      var path = qgisProject.fileName.toString()
+      if (path.startsWith("file://")) {
+        path = path.substring(7)
+      }
+      return decodeURIComponent(path)
+    }
+    return ""
+  }
+
+  function findProjectRoot(path) {
+    var parts = path.split("/")
+    for (var i = parts.length; i >= 1; i--) {
+      var testPath = parts.slice(0, i).join("/")
+      if (testPath && webdav.hasWebdavConfiguration(testPath)) {
+        return testPath
+      }
+    }
+    return ""
+  }
+
+  function isValidRoot(root) {
+    return root && webdav.hasWebdavConfiguration(root)
   }
 
   function isCurrentProject(projectRoot) {
@@ -511,22 +582,192 @@ Item {
     if (!current || !projectRoot) {
       return false
     }
-    var normalizedCurrent = current.replace(/\\/g, "/")
-    var normalizedRoot = projectRoot.replace(/\\/g, "/")
-    if (!normalizedRoot.endsWith("/")) normalizedRoot += "/"
-    return normalizedCurrent.indexOf(normalizedRoot) === 0 || normalizedCurrent === projectRoot.replace(/\/$/, "")
+    current = current.replace(/\\/g, "/").replace(/\/+$/, "")
+    projectRoot = projectRoot.replace(/\\/g, "/").replace(/\/+$/, "")
+    return current.startsWith(projectRoot + "/") || current === projectRoot
   }
 
-  function runAutoUploadCycle() {
+  function isNoChangesReason(reason) {
+    if (!reason) return false
+    var r = reason.toLowerCase()
+    return r.indexOf("no changes") !== -1 ||
+           r.indexOf("no local changes") !== -1 ||
+           r.indexOf("nothing to upload") !== -1 ||
+           r.indexOf("up to date") !== -1
+  }
+
+  function getProjectStatuses() {
+    try {
+      return JSON.parse(settings.projectStatuses)
+    } catch (e) {
+      return {}
+    }
+  }
+
+  function getProjectStatus(projectRoot) {
+    var statuses = getProjectStatuses()
+    var key = Qt.md5(projectRoot)
+    return statuses[key] || {}
+  }
+
+  function saveProjectStatus(projectRoot, status, message) {
+    var statuses = getProjectStatuses()
+    var key = Qt.md5(projectRoot)
+    statuses[key] = {
+      status: status,
+      message: message || "",
+      timestamp: new Date().toISOString()
+    }
+    settings.projectStatuses = JSON.stringify(statuses)
+  }
+
+  function getPending() {
+    try {
+      return JSON.parse(settings.pendingUploads)
+    } catch (e) {
+      return []
+    }
+  }
+
+  function savePending(list) {
+    settings.pendingUploads = JSON.stringify(list)
+  }
+
+  function addPending(projectRoot) {
+    var list = getPending()
+    if (list.indexOf(projectRoot) === -1) {
+      list.push(projectRoot)
+      savePending(list)
+    }
+  }
+
+  function removePending(projectRoot) {
+    var list = getPending()
+    var index = list.indexOf(projectRoot)
+    if (index !== -1) {
+      list.splice(index, 1)
+      savePending(list)
+    }
+  }
+
+  function isPending(projectRoot) {
+    return getPending().indexOf(projectRoot) !== -1
+  }
+
+  function getKnownProjects() {
+    try {
+      return JSON.parse(settings.knownProjects)
+    } catch (e) {
+      return []
+    }
+  }
+
+  function saveKnownProjects(list) {
+    settings.knownProjects = JSON.stringify(list)
+  }
+
+  function rememberProject(root) {
+    if (!root) return
+    var list = getKnownProjects()
+    if (list.indexOf(root) === -1) {
+      list.push(root)
+      saveKnownProjects(list)
+    }
+  }
+
+  function updateNextCheck() {
+    if (!settings.enabled) {
+      nextScheduledCheck = new Date(0)
+      return
+    }
+    var anchor = settings.timerAnchor ? new Date(settings.timerAnchor) : new Date()
+    if (isNaN(anchor.getTime())) {
+      anchor = new Date()
+    }
+    var now = new Date()
+    //var ms = Math.max(1, settings.intervalHours) * 3600000
+    var ms = intervalMs() //for testings
+
+    var elapsed = now.getTime() - anchor.getTime()
+    var steps = Math.max(1, Math.floor(elapsed / ms) + 1)
+    nextScheduledCheck = new Date(anchor.getTime() + steps * ms)
+  }
+
+  function updateActiveProject() {
+    var path = getProjectPath()
+    if (path) {
+      var root = findProjectRoot(path)
+      if (isValidRoot(root)) {
+        lastActiveWebdavProject = root
+        rememberProject(root)
+        return
+      }
+    }
+    lastActiveWebdavProject = ""
+  }
+
+  function findWebdavProjects(callback) {
+    var appDir = PlatformUtilities.applicationDirectory
+    if (!appDir) {
+      callback([])
+      return
+    }
+    if (appDir.endsWith("/")) {
+      appDir = appDir.slice(0, -1)
+    }
+    var importedDir = appDir + "/Imported Projects"
+    folderScanner.startScan(importedDir, callback)
+  }
+
+  function getAllProjects(callback) {
+    var known = getKnownProjects()
+    findWebdavProjects(function(scanned) {
+      var all = known.slice()
+      for (var i = 0; i < scanned.length; i++) {
+        if (all.indexOf(scanned[i]) === -1) {
+          all.push(scanned[i])
+        }
+      }
+      var valid = []
+      for (var j = 0; j < all.length; j++) {
+        if (isValidRoot(all[j])) {
+          valid.push(all[j])
+        }
+      }
+      saveKnownProjects(valid)
+      callback(valid)
+    })
+  }
+
+  function runAutoUploadCycle(isTimerTick) {
     if (!settings.enabled || isProcessingQueue || webdav.isUploadingPath) {
       return
     }
 
-    findWebdavProjects(function(projects) {
+    var pending = getPending()
+
+    getAllProjects(function(projects) {
+      if (!projects || projects.length === 0) {
+        return
+      }
+
       var toUpload = []
+
       for (var i = 0; i < projects.length; i++) {
-        if (!isCurrentProject(projects[i])) {
-          toUpload.push(projects[i])
+        var root = projects[i]
+        var active = isCurrentProject(root)
+        var due = pending.indexOf(root) !== -1
+
+        if (active) {
+          // Only mark "due" on real schedule tick
+          if (isTimerTick && !due) {
+            addPending(root)
+          }
+        } else {
+          // Upload only if due already, or schedule tick says its time
+          if (due || isTimerTick) {
+            toUpload.push(root)
+          }
         }
       }
 
@@ -545,7 +786,6 @@ Item {
       currentUploadPath = ""
       return
     }
-
     currentUploadPath = uploadQueue.shift()
     webdav.requestUpload(currentUploadPath, false)
   }
@@ -561,24 +801,14 @@ Item {
       return
     }
 
-    if (!webdav.hasWebdavConfiguration(path)) {
+    var root = findProjectRoot(path)
+    if (!isValidRoot(root)) {
       mainWindow.displayToast(qsTr("Not a WebDAV project"))
       return
     }
 
     manualUploadTriggered = true
-    currentUploadPath = findProjectRoot(path)
-    webdav.requestUpload(path, true)
-  }
-
-  function findProjectRoot(path) {
-    var parts = path.split("/")
-    for (var i = parts.length; i >= 1; i--) {
-      var testPath = parts.slice(0, i).join("/")
-      if (testPath && webdav.hasWebdavConfiguration(testPath)) {
-        return testPath
-      }
-    }
-    return path
+    currentUploadPath = root
+    webdav.requestUpload(root, true)
   }
 }
