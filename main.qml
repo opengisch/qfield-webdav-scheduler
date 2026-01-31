@@ -18,15 +18,6 @@ Item {
   property string lastActiveWebdavProject: ""
   property date nextScheduledCheck: new Date(0)
 
-  property int debugIntervalMinutes: 10
-
-  function intervalMs() {
-    if (debugIntervalMinutes > 0) {
-      return debugIntervalMinutes * 60 * 1000
-    }
-    return Math.max(1, settings.intervalHours) * 3600000
-  }
-
   Settings {
     id: settings
     category: "qfield-webdav-autoupload"
@@ -42,11 +33,11 @@ Item {
   Component.onCompleted: {
     iface.addItemToDashboardActionsToolbar(uploadButton)
     updateActiveProject()
+
     if (settings.enabled) {
-      // if (!settings.timerAnchor) {
-      //   settings.timerAnchor = new Date().toISOString()
-      // }
-      settings.timerAnchor = new Date().toISOString() //for testing
+      if (!settings.timerAnchor) {
+        settings.timerAnchor = new Date().toISOString()
+      }
       updateNextCheck()
       Qt.callLater(function() { runAutoUploadCycle(false) })
       uploadTimer.restart()
@@ -85,28 +76,14 @@ Item {
     }
   }
 
-  // Timer {
-  //   id: uploadTimer
-  //   repeat: true
-  //   running: false
-  //   interval: Math.max(1, settings.intervalHours) * 3600000
-
-  //   onTriggered: {
-  //     updateNextCheck()
-  //     runAutoUploadCycle(true)
-  //   }
-  // }
-
   Timer {
     id: uploadTimer
     repeat: true
     running: false
-    interval: intervalMs()
+    interval: Math.max(1, settings.intervalHours) * 3600000
 
     onTriggered: {
-      // keep "Next check" accurate
       settings.timerAnchor = new Date().toISOString()
-
       updateNextCheck()
       runAutoUploadCycle(true)
     }
@@ -126,15 +103,20 @@ Item {
     onUploadFinished: function(success, message) {
       if (currentUploadPath) {
         saveProjectStatus(currentUploadPath, success ? "success" : "failed", message)
+
         if (success) {
           removePending(currentUploadPath)
+        } else {
+          addPending(currentUploadPath)
         }
       }
+
       if (manualUploadTriggered) {
         uploadOverlay.close()
         mainWindow.displayToast(success ? qsTr("Upload complete") : qsTr("Upload failed: %1").arg(message))
         manualUploadTriggered = false
       }
+
       if (isProcessingQueue) {
         Qt.callLater(processNextInQueue)
       } else {
@@ -145,15 +127,20 @@ Item {
     onUploadSkipped: function(reason) {
       if (currentUploadPath) {
         saveProjectStatus(currentUploadPath, "skipped", reason)
+
         if (isNoChangesReason(reason)) {
           removePending(currentUploadPath)
+        } else {
+          addPending(currentUploadPath)
         }
       }
+
       if (manualUploadTriggered) {
         uploadOverlay.close()
         mainWindow.displayToast(qsTr("Skipped: %1").arg(reason))
         manualUploadTriggered = false
       }
+
       if (isProcessingQueue) {
         Qt.callLater(processNextInQueue)
       } else {
@@ -239,7 +226,6 @@ Item {
     onAccepted: {
       settings.enabled = enableSwitch.checked
       settings.intervalHours = intervalTumbler.currentIndex + 1
-      //uploadTimer.interval = settings.intervalHours * 3600000
 
       if (settings.enabled) {
         settings.timerAnchor = new Date().toISOString()
@@ -253,6 +239,7 @@ Item {
         updateNextCheck()
         savePending([])
       }
+
       mainWindow.displayToast(qsTr("Settings saved"))
     }
 
@@ -295,9 +282,7 @@ Item {
           }
         }
 
-        Switch {
-          id: enableSwitch
-        }
+        Switch { id: enableSwitch }
       }
 
       Rectangle {
@@ -333,9 +318,7 @@ Item {
               visibleItemCount: 3
               enabled: enableSwitch.checked
 
-              background: Rectangle {
-                color: "transparent"
-              }
+              background: Rectangle { color: "transparent" }
 
               delegate: Label {
                 text: modelData + 1
@@ -364,9 +347,7 @@ Item {
             color: Theme.mainTextColor
           }
 
-          Item {
-            Layout.fillWidth: true
-          }
+          Item { Layout.fillWidth: true }
         }
       }
 
@@ -423,8 +404,7 @@ Item {
             }
           }
 
-          Label {
-            text: qsTr("Last upload:")
+          Label { text: qsTr("Last upload:")
             font: Theme.tipFont
             color: Theme.secondaryTextColor
           }
@@ -454,12 +434,13 @@ Item {
           }
         }
 
+        // show message for failed OR skipped
         Label {
           Layout.fillWidth: true
-          visible: statusSection.statusData.status === "failed" && statusSection.statusData.message
+          visible: (statusSection.statusData.status === "failed" || statusSection.statusData.status === "skipped") && statusSection.statusData.message
           text: statusSection.statusData.message || ""
           font: Theme.tipFont
-          color: Theme.errorColor
+          color: statusSection.statusData.status === "failed" ? Theme.errorColor : Theme.secondaryTextColor
           wrapMode: Text.WordWrap
         }
       }
@@ -542,6 +523,7 @@ Item {
     showFiles: true
     showHidden: false
     sortField: FolderListModel.Name
+
     onStatusChanged: {
       if (status === FolderListModel.Ready) {
         folderScanner.handleResults()
@@ -563,6 +545,7 @@ Item {
   }
 
   function findProjectRoot(path) {
+    path = path.replace(/\\/g, "/").replace(/\/+$/, "")
     var parts = path.split("/")
     for (var i = parts.length; i >= 1; i--) {
       var testPath = parts.slice(0, i).join("/")
@@ -588,7 +571,9 @@ Item {
   }
 
   function isNoChangesReason(reason) {
-    if (!reason) return false
+    if (!reason) {
+      return false
+    }
     var r = reason.toLowerCase()
     return r.indexOf("no changes") !== -1 ||
            r.indexOf("no local changes") !== -1 ||
@@ -613,11 +598,7 @@ Item {
   function saveProjectStatus(projectRoot, status, message) {
     var statuses = getProjectStatuses()
     var key = Qt.md5(projectRoot)
-    statuses[key] = {
-      status: status,
-      message: message || "",
-      timestamp: new Date().toISOString()
-    }
+    statuses[key] = { status: status, message: message || "", timestamp: new Date().toISOString() }
     settings.projectStatuses = JSON.stringify(statuses)
   }
 
@@ -667,7 +648,9 @@ Item {
   }
 
   function rememberProject(root) {
-    if (!root) return
+    if (!root) {
+      return
+    }
     var list = getKnownProjects()
     if (list.indexOf(root) === -1) {
       list.push(root)
@@ -680,14 +663,14 @@ Item {
       nextScheduledCheck = new Date(0)
       return
     }
+
     var anchor = settings.timerAnchor ? new Date(settings.timerAnchor) : new Date()
     if (isNaN(anchor.getTime())) {
       anchor = new Date()
     }
-    var now = new Date()
-    //var ms = Math.max(1, settings.intervalHours) * 3600000
-    var ms = intervalMs() //for testings
 
+    var now = new Date()
+    var ms = Math.max(1, settings.intervalHours) * 3600000
     var elapsed = now.getTime() - anchor.getTime()
     var steps = Math.max(1, Math.floor(elapsed / ms) + 1)
     nextScheduledCheck = new Date(anchor.getTime() + steps * ms)
@@ -709,7 +692,7 @@ Item {
   function findWebdavProjects(callback) {
     var appDir = PlatformUtilities.applicationDirectory
     if (!appDir) {
-      callback([])
+      callback([]);
       return
     }
     if (appDir.endsWith("/")) {
@@ -730,7 +713,8 @@ Item {
       }
       var valid = []
       for (var j = 0; j < all.length; j++) {
-        if (isValidRoot(all[j])) {
+        if (isValidRoot(all[j]))
+        {
           valid.push(all[j])
         }
       }
@@ -794,19 +778,16 @@ Item {
     if (webdav.isUploadingPath) {
       return
     }
-
     var path = getProjectPath()
     if (!path) {
       mainWindow.displayToast(qsTr("No project open"))
       return
     }
-
     var root = findProjectRoot(path)
     if (!isValidRoot(root)) {
       mainWindow.displayToast(qsTr("Not a WebDAV project"))
       return
     }
-
     manualUploadTriggered = true
     currentUploadPath = root
     webdav.requestUpload(root, true)
