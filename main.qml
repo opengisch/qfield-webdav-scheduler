@@ -485,9 +485,8 @@ Item {
 
       if (settings.enabled) {
         settings.lastCheckTime = new Date().toISOString()
-        uploadTimer.restart()
         initialDelayTimer.stop()
-        Qt.callLater(runAutoUploadCycle)
+        uploadTimer.restart()
       } else {
         uploadTimer.stop()
         initialDelayTimer.stop()
