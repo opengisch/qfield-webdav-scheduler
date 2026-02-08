@@ -11,6 +11,7 @@ Item {
   id: plugin
 
   property var mainWindow: iface.mainWindow()
+  property var busyOverlay: iface.findItemByObjectName('busyOverlay')
   property var uploadQueue: []
   property bool isUploading: false
   property string currentUploadPath: ""
@@ -34,10 +35,18 @@ Item {
     if (settings.enabled) {
       checkAndStartTimer()
     }
+
+    if (busyOverlay) {
+      busyOverlay.buttonClicked.connect(cancelUpload)
+    }
   }
 
   Component.onDestruction: {
     iface.removeItemFromDashboardActionsToolbar(uploadButton)
+
+    if (busyOverlay) {
+      busyOverlay.buttonClicked.disconnect(cancelUpload)
+    }
   }
 
   function configure() {
@@ -113,10 +122,21 @@ Item {
     id: webdav
 
     onIsUploadingPathChanged: {
-      if (isUploadingPath && isActiveProjectUpload) {
-        uploadOverlay.open()
-      } else if (!isUploadingPath) {
-        uploadOverlay.close()
+      if (isUploadingPath && isActiveProjectUpload && busyOverlay) {
+        busyOverlay.text = qsTr("Uploading to WebDAV")
+        busyOverlay.showProgress = true
+        busyOverlay.buttonText = qsTr("Cancel")
+        busyOverlay.progress = 0
+        busyOverlay.state = "visible"
+      } else if (!isUploadingPath && busyOverlay) {
+        busyOverlay.state = "hidden"
+        busyOverlay.buttonText = ""
+      }
+    }
+
+    onProgressChanged: {
+      if (isActiveProjectUpload && busyOverlay) {
+        busyOverlay.progress = progress
       }
     }
 
@@ -124,8 +144,9 @@ Item {
       settings.lastUploadStatus = success ? "success" : "failed"
       settings.lastUploadMessage = message || ""
 
-      if (isActiveProjectUpload) {
-        uploadOverlay.close()
+      if (isActiveProjectUpload && busyOverlay) {
+        busyOverlay.state = "hidden"
+        busyOverlay.buttonText = ""
         mainWindow.displayToast(success ? qsTr("Upload complete") : qsTr("Upload failed: %1").arg(message))
       }
 
@@ -137,8 +158,9 @@ Item {
       settings.lastUploadStatus = "skipped"
       settings.lastUploadMessage = reason || ""
 
-      if (isActiveProjectUpload) {
-        uploadOverlay.close()
+      if (isActiveProjectUpload && busyOverlay) {
+        busyOverlay.state = "hidden"
+        busyOverlay.buttonText = ""
         mainWindow.displayToast(qsTr("Skipped: %1").arg(reason))
       }
 
@@ -215,7 +237,10 @@ Item {
   function cancelUpload() {
     if (isActiveProjectUpload && webdav.isUploadingPath) {
       webdav.cancelRequest()
-      uploadOverlay.close()
+      if (busyOverlay) {
+        busyOverlay.state = "hidden"
+        busyOverlay.buttonText = ""
+      }
       mainWindow.displayToast(qsTr("Upload cancelled"))
     }
     uploadQueue = []
@@ -416,51 +441,6 @@ Item {
     enabled: !webdav.isUploadingPath && !isUploading
     opacity: enabled ? 1.0 : 0.4
     onClicked: triggerManualUpload()
-  }
-
-  QfDialog {
-    id: uploadOverlay
-    parent: mainWindow.contentItem
-    modal: true
-    closePolicy: Popup.NoAutoClose
-    standardButtons: Dialog.Cancel
-    title: qsTr("Uploading to WebDAV")
-
-    width: Math.min(parent.width - 40, 320)
-    x: (parent.width - width) / 2
-    y: (parent.height - height) / 2
-
-    onRejected: cancelUpload()
-
-    ColumnLayout {
-      width: parent.width
-      spacing: 16
-
-      Label {
-        Layout.fillWidth: true
-        text: qsTr("Syncing your project…")
-        font: Theme.tipFont
-        color: Theme.secondaryTextColor
-        wrapMode: Text.WordWrap
-      }
-
-      ProgressBar {
-        Layout.fillWidth: true
-        from: 0
-        to: 1
-        value: webdav.progress
-        indeterminate: webdav.progress < 0.01
-      }
-
-      Label {
-        Layout.fillWidth: true
-        horizontalAlignment: Text.AlignRight
-        text: Math.round(webdav.progress * 100) + "%"
-        font: Theme.tipFont
-        color: Theme.secondaryTextColor
-        visible: webdav.progress >= 0.01
-      }
-    }
   }
 
   QfDialog {
