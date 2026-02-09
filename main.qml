@@ -37,7 +37,7 @@ Item {
     }
 
     if (busyOverlay) {
-      busyOverlay.buttonClicked.connect(cancelUpload)
+      busyOverlay.actionClicked.connect(cancelUpload)
     }
   }
 
@@ -45,7 +45,7 @@ Item {
     iface.removeItemFromDashboardActionsToolbar(uploadButton)
 
     if (busyOverlay) {
-      busyOverlay.buttonClicked.disconnect(cancelUpload)
+      busyOverlay.actionClicked.disconnect(cancelUpload)
     }
   }
 
@@ -125,12 +125,12 @@ Item {
       if (isUploadingPath && isActiveProjectUpload && busyOverlay) {
         busyOverlay.text = qsTr("Uploading to WebDAV")
         busyOverlay.showProgress = true
-        busyOverlay.buttonText = qsTr("Cancel")
+        busyOverlay.actionText = qsTr("Cancel")
         busyOverlay.progress = 0
         busyOverlay.state = "visible"
       } else if (!isUploadingPath && busyOverlay) {
         busyOverlay.state = "hidden"
-        busyOverlay.buttonText = ""
+        busyOverlay.actionText = ""
       }
     }
 
@@ -146,7 +146,7 @@ Item {
 
       if (isActiveProjectUpload && busyOverlay) {
         busyOverlay.state = "hidden"
-        busyOverlay.buttonText = ""
+        busyOverlay.actionText = ""
         mainWindow.displayToast(success ? qsTr("Upload complete") : qsTr("Upload failed: %1").arg(message))
       }
 
@@ -160,7 +160,7 @@ Item {
 
       if (isActiveProjectUpload && busyOverlay) {
         busyOverlay.state = "hidden"
-        busyOverlay.buttonText = ""
+        busyOverlay.actionText = ""
         mainWindow.displayToast(qsTr("Skipped: %1").arg(reason))
       }
 
@@ -239,7 +239,7 @@ Item {
       webdav.cancelRequest()
       if (busyOverlay) {
         busyOverlay.state = "hidden"
-        busyOverlay.buttonText = ""
+        busyOverlay.actionText = ""
       }
       mainWindow.displayToast(qsTr("Upload cancelled"))
     }
