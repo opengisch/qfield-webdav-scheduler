@@ -308,6 +308,12 @@ Item {
     var known = getKnownProjects()
 
     var appDir = PlatformUtilities.applicationDirectory
+    if (!appDir) {
+      // PlatformUtilities not available, just use known projects
+      callback(known)
+      return
+    }
+
     if (appDir.endsWith("/")) {
       appDir = appDir.slice(0, -1)
     }
