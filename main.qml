@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtCore
-import Qt.labs.folderlistmodel
 import org.qfield
 import org.qgis
 import Theme
@@ -229,9 +228,7 @@ Item {
     rememberProject(projectRoot)
     uploadQueue = [projectRoot]
     isUploading = true
-    isActiveProjectUpload = true
-    currentUploadPath = projectRoot
-    webdav.requestUpload(projectRoot, true)
+    processNextProject()  // This will shift from queue and start upload
   }
 
   function cancelUpload() {
@@ -260,27 +257,9 @@ Item {
     return ""
   }
 
-  function findProjectRoot(path) {
-    path = path.replace(/\\/g, "/").replace(/\/+$/, "")
-    var parts = path.split("/")
-    for (var i = parts.length; i >= 1; i--) {
-      var testPath = parts.slice(0, i).join("/")
-      if (testPath && webdav.hasWebdavConfiguration(testPath)) {
-        return testPath
-      }
-    }
-    return ""
-  }
-
   function getCurrentProjectRoot() {
     var path = getProjectPath()
-    if (path) {
-      var root = findProjectRoot(path)
-      if (root && webdav.hasWebdavConfiguration(root)) {
-        return root
-      }
-    }
-    return ""
+    return path ? webdav.findWebdavRootForPath(path) : ""
   }
 
   function isCurrentProject(projectRoot) {
@@ -327,107 +306,30 @@ Item {
 
   function getAllProjects(callback) {
     var known = getKnownProjects()
-    scanWebdavProjects(function(scanned) {
-      var all = known.slice()
-      for (var i = 0; i < scanned.length; i++) {
-        if (all.indexOf(scanned[i]) === -1) {
-          all.push(scanned[i])
-        }
-      }
-      // validate and update cache
-      var valid = []
-      for (var j = 0; j < all.length; j++) {
-        if (webdav.hasWebdavConfiguration(all[j])) {
-          valid.push(all[j])
-        }
-      }
-      saveKnownProjects(valid)
-      callback(valid)
-    })
-  }
 
-  // Recursive folder scanner
-  QtObject {
-    id: folderScanner
-
-    property var callback: null
-    property var foundProjects: []
-    property var pendingFolders: []
-    property bool scanning: false
-
-    function startScan(rootPath, cb) {
-      if (scanning) {
-        return
-      }
-      callback = cb
-      foundProjects = []
-      pendingFolders = [rootPath]
-      scanning = true
-      scanNext()
-    }
-
-    function scanNext() {
-      if (pendingFolders.length === 0) {
-        scanning = false
-        if (callback) {
-          callback(foundProjects)
-        }
-        return
-      }
-      var folder = pendingFolders.shift()
-      scanModel.folder = Qt.resolvedUrl("file://" + folder)
-    }
-
-    function handleResults() {
-      for (var i = 0; i < scanModel.count; i++) {
-        var fileName = scanModel.get(i, "fileName")
-        var filePath = scanModel.get(i, "filePath")
-        var isDir = scanModel.get(i, "fileIsDir")
-
-        var cleanPath = filePath.toString()
-        if (cleanPath.startsWith("file://")) {
-          cleanPath = cleanPath.substring(7)
-        }
-        cleanPath = decodeURIComponent(cleanPath)
-
-        if (fileName === "qfield_webdav_configuration.json") {
-          var projectRoot = cleanPath.replace("/qfield_webdav_configuration.json", "")
-          if (foundProjects.indexOf(projectRoot) === -1) {
-            foundProjects.push(projectRoot)
-          }
-        } else if (isDir && fileName.charAt(0) !== ".") {
-          pendingFolders.push(cleanPath)
-        }
-      }
-      scanNext()
-    }
-  }
-
-  FolderListModel {
-    id: scanModel
-    showDirs: true
-    showFiles: true
-    showHidden: false
-    sortField: FolderListModel.Name
-    onStatusChanged: {
-      if (status === FolderListModel.Ready) {
-        folderScanner.handleResults()
-      } else if (status === FolderListModel.Error || status === FolderListModel.Null) {
-        folderScanner.scanNext()
-      }
-    }
-  }
-
-  function scanWebdavProjects(callback) {
     var appDir = PlatformUtilities.applicationDirectory
-    if (!appDir) {
-      callback([])
-      return
-    }
     if (appDir.endsWith("/")) {
       appDir = appDir.slice(0, -1)
     }
-    folderScanner.startScan(appDir + "/Imported Projects", callback)
+    var scanned = webdav.findWebdavProjectFolders(appDir + "/Imported Projects")
+
+    // Merge known and scanned
+    var all = known.slice()
+    for (var i = 0; i < scanned.length; i++) {
+      if (all.indexOf(scanned[i]) === -1) {
+        all.push(scanned[i])
+      }
+    }
+
+    // Validate and update cache
+    var valid = []
+    for (var j = 0; j < all.length; j++) {
+      if (webdav.hasWebdavConfiguration(all[j])) {
+        valid.push(all[j])
+      }
+    }
+    saveKnownProjects(valid)
+    callback(valid)
   }
 
   QfToolButton {
@@ -512,9 +414,9 @@ Item {
         color: Theme.controlBorderColor
       }
 
-      ColumnLayout {
+      RowLayout {
         Layout.fillWidth: true
-        spacing: 12
+        spacing: 16
         opacity: enableSwitch.checked ? 1.0 : 0.4
 
         Label {
@@ -523,56 +425,51 @@ Item {
           color: Theme.mainTextColor
         }
 
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: 16
+        Item {
+          Layout.preferredWidth: 60
+          Layout.preferredHeight: 90
 
-          Item {
-            Layout.preferredWidth: 60
-            Layout.preferredHeight: 90
+          Tumbler {
+            id: intervalTumbler
+            anchors.fill: parent
+            model: 24
+            wrap: true
+            visibleItemCount: 3
+            enabled: enableSwitch.checked
 
-            Tumbler {
-              id: intervalTumbler
-              anchors.fill: parent
-              model: 24
-              wrap: true
-              visibleItemCount: 3
-              enabled: enableSwitch.checked
-
-              background: Rectangle {
-                color: "transparent"
-              }
-
-              delegate: Label {
-                text: modelData + 1
-                font: Theme.defaultFont
-                color: Theme.mainTextColor
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                opacity: 1.0 - Math.abs(Tumbler.displacement) / (intervalTumbler.visibleItemCount / 2)
-              }
-            }
-
-            Rectangle {
-              anchors.centerIn: parent
-              width: parent.width + 8
-              height: 30
+            background: Rectangle {
               color: "transparent"
-              border.color: enableSwitch.checked ? Theme.mainColor : Theme.controlBorderColor
-              border.width: 1
-              radius: 4
+            }
+
+            delegate: Label {
+              text: modelData + 1
+              font: Theme.defaultFont
+              color: Theme.mainTextColor
+              horizontalAlignment: Text.AlignHCenter
+              verticalAlignment: Text.AlignVCenter
+              opacity: 1.0 - Math.abs(Tumbler.displacement) / (intervalTumbler.visibleItemCount / 2)
             }
           }
 
-          Label {
-            text: (intervalTumbler.currentIndex + 1) === 1 ? qsTr("hour") : qsTr("hours")
-            font: Theme.defaultFont
-            color: Theme.mainTextColor
+          Rectangle {
+            anchors.centerIn: parent
+            width: parent.width + 8
+            height: 30
+            color: "transparent"
+            border.color: enableSwitch.checked ? Theme.mainColor : Theme.controlBorderColor
+            border.width: 1
+            radius: 4
           }
+        }
 
-          Item {
-            Layout.fillWidth: true
-          }
+        Label {
+          text: (intervalTumbler.currentIndex + 1) === 1 ? qsTr("hour") : qsTr("hours")
+          font: Theme.defaultFont
+          color: Theme.mainTextColor
+        }
+
+        Item {
+          Layout.fillWidth: true
         }
       }
 
