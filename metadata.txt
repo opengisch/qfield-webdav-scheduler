@@ -1,0 +1,7 @@
+[general]
+name=WebDAV Scheduler
+description=A WebDAV automated upload scheduler plugin for QField.
+author=OPENGIS.ch
+icon=icon.svg
+version=1.0.0
+homepage=https://www.opengis.ch/
