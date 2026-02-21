@@ -52,12 +52,12 @@ Item {
 
   // Handle interval persistence across app restarts
   function checkAndStartTimer() {
-    var now = new Date()
-    var lastCheck = settings.lastCheckTime ? new Date(settings.lastCheckTime) : null
-    var interval = intervalMs()
+    let now = new Date()
+    let lastCheck = settings.lastCheckTime ? new Date(settings.lastCheckTime) : null
+    let interval = intervalMs()
 
     if (lastCheck) {
-      var elapsed = now.getTime() - lastCheck.getTime()
+      let elapsed = now.getTime() - lastCheck.getTime()
       if (elapsed >= interval) {
         settings.lastCheckTime = now.toISOString()
         Qt.callLater(runAutoUploadCycle)
@@ -81,7 +81,7 @@ Item {
     if (!settings.enabled) {
       return null
     }
-    var lastCheck = settings.lastCheckTime ? new Date(settings.lastCheckTime) : new Date()
+    const lastCheck = settings.lastCheckTime ? new Date(settings.lastCheckTime) : new Date()
     return new Date(lastCheck.getTime() + intervalMs())
   }
 
@@ -178,7 +178,7 @@ Item {
       return
     }
 
-    var projectRoot = uploadQueue.shift()
+    let projectRoot = uploadQueue.shift()
     currentUploadPath = projectRoot
     isActiveProjectUpload = isCurrentProject(projectRoot)
 
@@ -197,8 +197,8 @@ Item {
       }
 
       //active project first so it shows overlay
-      var ordered = []
-      for (var i = 0; i < projects.length; i++) {
+      let ordered = []
+      for (let i = 0; i < projects.length; i++) {
         if (isCurrentProject(projects[i])) {
           ordered.unshift(projects[i])
         } else {
@@ -217,7 +217,7 @@ Item {
       return
     }
 
-    var projectRoot = getCurrentProjectRoot()
+    let projectRoot = getCurrentProjectRoot()
     if (!projectRoot) {
       mainWindow.displayToast(qsTr("No WebDAV project open"))
       return
@@ -246,7 +246,7 @@ Item {
 
   function getProjectPath() {
     if (qgisProject && qgisProject.fileName) {
-      var path = qgisProject.fileName.toString()
+      let path = qgisProject.fileName.toString()
       if (path.startsWith("file://")) {
         path = path.substring(7)
       }
@@ -256,12 +256,12 @@ Item {
   }
 
   function getCurrentProjectRoot() {
-    var path = getProjectPath()
+    let path = getProjectPath()
     return path ? webdav.findWebdavRootForPath(path) : ""
   }
 
   function isCurrentProject(projectRoot) {
-    var current = getProjectPath()
+    let current = getProjectPath()
     if (!current || !projectRoot) {
       return false
     }
@@ -271,7 +271,7 @@ Item {
   }
 
   function rememberCurrentProject() {
-    var root = getCurrentProjectRoot()
+    let root = getCurrentProjectRoot()
     if (root) {
       rememberProject(root)
     }
@@ -295,7 +295,7 @@ Item {
     if (!root) {
       return
     }
-    var list = getKnownProjects()
+    let list = getKnownProjects()
     if (list.indexOf(root) === -1) {
       list.push(root)
       saveKnownProjects(list)
@@ -303,8 +303,8 @@ Item {
   }
 
   function getAllProjects(callback) {
-    var known = getKnownProjects()
-    var appDir = platformUtilities.applicationDirectory()
+    let known = getKnownProjects()
+    let appDir = platformUtilities.applicationDirectory()
     if (!appDir) {
       // PlatformUtilities not available, just use known projects
       callback(known)
@@ -314,19 +314,19 @@ Item {
     if (appDir.endsWith("/")) {
       appDir = appDir.slice(0, -1)
     }
-    var scanned = webdav.findWebdavProjectFolders(appDir + "/Imported Projects")
+    let scanned = webdav.findWebdavProjectFolders(appDir + "/Imported Projects")
 
     // Merge known and scanned
-    var all = known.slice()
-    for (var i = 0; i < scanned.length; i++) {
+    let all = known.slice()
+    for (let i = 0; i < scanned.length; i++) {
       if (all.indexOf(scanned[i]) === -1) {
         all.push(scanned[i])
       }
     }
 
     // Validate and update cache
-    var valid = []
-    for (var j = 0; j < all.length; j++) {
+    let valid = []
+    for (let j = 0; j < all.length; j++) {
       if (webdav.hasWebdavConfiguration(all[j])) {
         valid.push(all[j])
       }
@@ -511,7 +511,7 @@ Item {
           Label {
             visible: settings.lastUploadStatus !== ""
             text: {
-              var s = settings.lastUploadStatus
+              let s = settings.lastUploadStatus
               if (s === "success") {
                 return qsTr("Success")
               }
@@ -525,7 +525,7 @@ Item {
             }
             font: Theme.tipFont
             color: {
-              var s = settings.lastUploadStatus
+              let s = settings.lastUploadStatus
               if (s === "success") {
                 return Theme.mainColor
               }
@@ -560,7 +560,7 @@ Item {
           Label {
             visible: settings.enabled
             text: {
-              var next = getNextCheckTime()
+              let next = getNextCheckTime()
               return next ? Qt.formatDateTime(next, "MMM d, hh:mm") : qsTr("Pending")
             }
             font: Theme.tipFont
