@@ -492,9 +492,7 @@ Item {
 
         Label {
           text: qsTr("Status")
-          font.family: Theme.defaultFont.family
-          font.pointSize: Theme.defaultFont.pointSize
-          font.bold: true
+          font: Theme.defaultFont
           color: Theme.mainTextColor
         }
 
