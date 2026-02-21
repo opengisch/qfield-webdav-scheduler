@@ -41,8 +41,6 @@ Item {
   }
 
   Component.onDestruction: {
-    iface.removeItemFromDashboardActionsToolbar(uploadButton)
-
     if (busyOverlay) {
       busyOverlay.actionClicked.disconnect(cancelUpload)
     }
@@ -348,7 +346,10 @@ Item {
     bgcolor: "transparent"
     enabled: !webdav.isUploadingPath && !isUploading
     opacity: enabled ? 1.0 : 0.4
-    onClicked: triggerManualUpload()
+    onClicked: {
+      iface.findItemByObjectName("dashBoard").close()
+      triggerManualUpload()
+    }
   }
 
   QfDialog {
