@@ -304,8 +304,7 @@ Item {
 
   function getAllProjects(callback) {
     var known = getKnownProjects()
-
-    var appDir = PlatformUtilities.applicationDirectory
+    var appDir = platformUtilities.applicationDirectory()
     if (!appDir) {
       // PlatformUtilities not available, just use known projects
       callback(known)
